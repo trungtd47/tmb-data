@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-15 09:00:46",
+  "updated": "2026-08-15 14:00:12",
   "source": "farside.co.uk",
   "btc_flows": [
     {
@@ -28,7 +28,7 @@
     },
     {
       "date": "2026-08-14",
-      "total": -0.7
+      "total": -56.2
     }
   ],
   "eth_flows": [
