@@ -1,0 +1,73 @@
+# Lưu trữ giá thị trường hằng ngày (market archive)
+
+**Date:** 2026-11-10 · **Task:** t_8084425e
+
+Mục tiêu: TMB tự tích lũy dữ liệu gốc theo thời gian (USD Vietcombank, SJC miếng, nhẫn SJC, vàng thế giới, USDT P2P) để làm trang thống kê. Trước đây chỉ USDT P2P được lưu; các số khác mất dần mỗi ngày.
+
+## File dữ liệu (repo tmb-data, nhánh main)
+
+| File | Nội dung | Giữ |
+|---|---|---|
+| `public/data/market-hourly.json` | Mẫu giờ: `t` (UTC), `usdt_buy/sell/mid`, `vcb_cash_buy/transfer_buy/sell`, `sjc_buy/sell`, `ring_buy/sell`, `xau_usd`, `delayed`, `at_usdt/at_vcb/at_gold` (thời điểm cập nhật của từng nguồn) | 45 ngày |
+| `public/data/market-daily.json` | 1 dòng/ngày giờ VN: mỗi chỉ số `{open,high,low,close,avg,n}` + chỉ số dẫn xuất | vĩnh viễn |
+| `public/data/p2p-daily.json`, `p2p-history.json` | Cron P2P cũ (không đổi) | như cũ |
+
+Raw: `https://raw.githubusercontent.com/trungtd47/tmb-data/main/public/data/market-daily.json`
+
+`market-daily.json` có `schema_version`, `method` (công thức tiếng Việt từng chỉ số), `sources`, `days[]`. Dòng ngày có thêm: `backfill` (true = dựng lại từ nguồn lịch sử, `n:1`), `samples` (số mẫu giờ), `spread_unreliable` (ngày < 2026-11-10), `weekend` (T7/CN, nguồn giữ giá phiên trước), `src` (nguồn từng nhóm).
+
+## Công thức
+
+- `usdt_mid` = trung bình giá mua/bán USDT P2P (Binance P2P, 5 quảng cáo đầu mỗi chiều).
+- `usdt_vs_vcb_pct` = (USDT mid − VCB bán) / VCB bán × 100.
+- Vàng thế giới quy đổi = `xau_usd` × 1,20565 oz/lượng × VCB bán (1,20565 = 37,5 g / 31,1035 g).
+- `sjc_vs_world_mil` = (SJC bán − vàng thế giới quy đổi) / 1.000.000 (triệu đồng/lượng); `sjc_vs_world_pct` = chênh đó / vàng thế giới quy đổi × 100.
+- `sjc_spread_pct` = (SJC bán − SJC mua) / SJC bán × 100; `ring_spread_pct` tương tự cho nhẫn; `usd_cash_spread_pct` = (VCB bán − VCB mua tiền mặt) / VCB bán × 100.
+- Dòng live: dẫn xuất tính trên từng mẫu giờ đủ đầu vào rồi mới gộp OHLC/avg theo ngày. Dòng backfill: tính trên số 1 bản/ngày, với USDT dùng `avg` ngày của p2p-daily.
+- Thiếu nguồn / vàng `delayed` / số ngoài khoảng hợp lý ⇒ `null`. Không điền số giả, không carry-forward.
+
+## Script và cron (ngoài repo, profile coder)
+
+- `~/.hermes/profiles/coder/scripts/market_archive.py` - stdlib, cron `38f9897db3c7` "Market Archive (giá hằng giờ)": `7 * * * *`, Asia/Ho_Chi_Minh, no_agent, deliver local (giống cron P2P; stdout rỗng khi ổn, chỉ in khi lỗi). 1 request `themoneybrew.org/api/gia-hom-nay`/giờ. Commit + push qua git worktree riêng từ `origin/main` (không đụng working tree của `~/projects/tmb-data`), tự thử lại tối đa 3 lần nếu push bị từ chối do cron P2P đẩy xen giữa. Bỏ qua mẫu nếu mẫu trước < 15 phút.
+- `~/.hermes/profiles/coder/scripts/market_backfill.py` - chạy 1 lần (idempotent, chỉ thay dòng `backfill:true`, không đụng dòng live). Giãn request VCB ≥ 2,2 giây, cache ở thư mục scratch.
+- Test: `tests/test_market_archive.py` (`python3 -m unittest tests/test_market_archive.py`), 13 test: gộp ngày OHLC, null/delayed, công thức premium, ranh giới ngày VN, cửa sổ 45 ngày.
+
+## Nguồn backfill
+
+| Cột | Nguồn | Ghi chú |
+|---|---|---|
+| USD VCB (mua tiền mặt/chuyển khoản/bán) | `vietcombank.com.vn/api/exchangerates?date=YYYY-MM-DD` | Bản cuối ngày (`UpdatedDate` 23:00). T7/CN VCB giữ giá thứ Sáu. |
+| SJC miếng, nhẫn SJC 9999, XAU/USD | `vang.today/api/prices?days=N` (mã `SJL1L10`, `SJ9999`, `XAUUSD`) | Cùng nguồn với dữ liệu live nên chuỗi liền mạch. Mỗi ngày 1 mốc (giá cập nhật cuối ngày). |
+| USDT | `p2p-daily.json` (OHLC, avg, spread) | `spread_unreliable:true` cho ngày < 2026-11-10 (chiều mua/bán bị đảo, sửa 6ebaf93b); `mid`/avg đúng. Không xóa gì. |
+
+### Lệch so với brief
+
+- **SJC không lấy từ Simplize** mà từ vang.today `SJL1L10`: Simplize `SJC:M1L` thiếu 29/93 ngày (cuối tuần, lễ), vang.today đủ 93/93 và cùng nguồn với dòng live. Simplize dùng để đối chiếu: trong 64 ngày có cả hai, 52 ngày trùng khớp tuyệt đối, 12 ngày lệch ≤ 1,5 triệu/lượng (≤ 1%, do chốt giá khác thời điểm trong ngày).
+- **Nhẫn**: Simplize không có ticker nhẫn (thử `SJC:N1L`, `NHAN`, `R9999`, `N9999` đều rỗng); lấy từ vang.today `SJ9999` (khớp số live 137,2/141,2 triệu).
+- **Vàng thế giới**: Stooq bị chặn bằng JS challenge. Dùng vang.today `XAUUSD` (spot, khớp gold-api.com live trong ~0,3%). Đối chiếu Simplize `GC=F` (hợp đồng tương lai COMEX): XAU thấp hơn GC=F trung bình 0,73%, tối đa 1,4% - cùng chiều với phí contango, không dùng GC=F vì không phải giá spot.
+- **USD VCB 16/10/2026**: bản cuối ngày bán 26.080 (mua tiền mặt 25.670); vault ghi 26.060 (mua 25.650) chụp lúc khác trong ngày. Cùng lệch +20 hai chiều nên là chênh theo giờ, không phải lỗi dữ liệu.
+
+## Độ phủ (2026-08-09 → 2026-11-09, 93 ngày backfill; từ 2026-11-10 là dòng live)
+
+| Cột | Số ngày có | Ngày thiếu |
+|---|---|---|
+| usdt_mid (OHLC từ p2p-daily) | 93/93 | không |
+| usdt_spread | 93/93 | không (cờ unreliable cả 93 ngày) |
+| vcb_cash_buy / transfer_buy / sell | 93/93 | không |
+| sjc_buy / sjc_sell | 93/93 | không |
+| ring_buy / ring_sell | 93/93 | không |
+| xau_usd | 93/93 | không |
+| 6 chỉ số dẫn xuất | 93/93 | không |
+
+27/93 ngày là T7/CN (cờ `weekend:true`): giá VCB, SJC giữ nguyên phiên trước; XAU là mốc đóng cửa thứ Sáu/giá cuối. Khi vẽ biểu đồ nên lọc `weekend` nếu cần chuỗi chỉ ngày giao dịch.
+
+## Lưu ý cho trang thống kê
+
+- Dòng backfill chỉ 1 điểm/ngày (`n:1`), `open=high=low=close=avg`; chỉ USDT có OHLC thật (n = số mẫu 30 phút). High/low trong ngày của VCB/SJC/vàng chỉ có từ 2026-11-10 trở đi.
+- **2026-11-10 là ngày không trọn** (cron bắt đầu giữa ngày, xem `samples`).
+- Dòng ngày live ghi đè theo cửa sổ 45 ngày của market-hourly, dòng backfill không bị chạm.
+- Vàng `delayed` ở API (fallback Simplize theo ngày) ghi `null`, `delayed:true` trong mẫu giờ.
+
+## Lesson
+
+Nguồn "đủ 1 request/ngày" cần kiểm độ phủ trước khi chọn: Simplize thiếu 31% ngày, nguồn cùng chuỗi với live (vang.today) đủ 100% và khỏi lệch nguồn khi nối backfill với dòng live.
