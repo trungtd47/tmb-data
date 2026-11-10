@@ -127,7 +127,7 @@ class ApplySample(unittest.TestCase):
         self.assertEqual(len(h["points"]), 1)  # điểm 60 ngày trước bị cắt
         self.assertEqual([r["d"] for r in d["days"]], ["2026-08-09", "2026-11-10"])
         self.assertTrue(d["days"][0]["backfill"])  # dòng backfill còn nguyên
-        self.assertEqual(d["schema_version"], 1)
+        self.assertEqual(d["schema_version"], 2)
         self.assertIn("usdt_vs_vcb_pct", d["method"])
         # mẫu thứ 2 cách 10 phút -> bị chặn
         h2, d2, added2 = ma.apply_sample(h, d, ma.build_sample(API, now + timedelta(minutes=10)), now)
@@ -141,6 +141,52 @@ class ApplySample(unittest.TestCase):
         h, d, _ = ma.apply_sample({"points": [ma.build_sample(API, edge)]}, ma.new_daily([kept], "x"),
                                   ma.build_sample(API, now), now)
         self.assertEqual(d["days"][0].get("marker"), "giữ")
+
+
+BRANDS = [
+    {"id": "btmh_sjc", "buy": 138500000, "sell": 141500000},
+    {"id": "btmh_kgb", "buy": 137000000, "sell": 141000000},
+    {"id": "pnj_ring", "buy": 136700000, "sell": 140900000},
+    {"id": "sjc_sjc", "buy": 138500000, "sell": 141500000},  # đã có sjc_* nên không lưu lại
+    {"id": "doji_ring", "buy": 137200000, "sell": 1},  # sell rác => null, không phải 1 đ
+]
+
+
+class Brands(unittest.TestCase):
+    def test_sample_has_brand_prices_and_ignores_unknown_or_garbage(self):
+        s = ma.build_sample({**API, "brands": BRANDS}, at(10))
+        self.assertEqual((s["btmh_kgb_buy"], s["btmh_kgb_sell"]), (137000000, 141000000))
+        self.assertEqual(s["pnj_ring_sell"], 140900000)
+        self.assertIsNone(s["doji_ring_sell"])
+        self.assertIsNone(s["pq_ring_buy"])  # hãng không có trong API => null
+        self.assertNotIn("sjc_sjc_buy", s)
+
+    def test_sample_without_brands_key_is_all_null(self):
+        s = ma.build_sample(API, at(10))
+        for b in ma.BRAND_IDS:
+            self.assertIsNone(s[f"{b}_buy"])
+            self.assertIsNone(s[f"{b}_sell"])
+
+    def test_spread_formula_and_missing_side(self):
+        v = ma.sample_values(ma.build_sample({**API, "brands": BRANDS}, at(10)))
+        self.assertAlmostEqual(v["btmh_kgb_spread_pct"], 4 / 141 * 100, places=3)
+        self.assertAlmostEqual(v["pnj_ring_spread_pct"], 4.2 / 140.9 * 100, places=3)
+        self.assertIsNone(v["doji_ring_spread_pct"])  # thiếu bán ra
+        self.assertIsNone(v["pq_sjc_spread_pct"])
+
+    def test_day_aggregate_and_old_rows_normalized(self):
+        s1 = ma.build_sample({**API, "brands": BRANDS}, at(9))
+        s2 = ma.build_sample({**API, "brands": [{"id": "btmh_kgb", "buy": 137200000, "sell": 141000000}]}, at(10))
+        row = ma.aggregate_day("2026-11-10", [s1, s2])
+        k = row["btmh_kgb_buy"]
+        self.assertEqual((k["open"], k["close"], k["n"]), (137000000, 137200000, 2))
+        self.assertEqual(row["pnj_ring_sell"]["n"], 1)
+        self.assertIsNone(row["pq_ring_buy"])
+        old = ma.normalize_row({"d": "2026-08-09", "backfill": True})
+        self.assertTrue(all(m in old and old[m] is None for m in ma.ALL_METRICS))
+        self.assertIn("btmh_kgb_spread_pct", ma.METHOD)
+        _, d, _ = ma.apply_sample({"points": []}, ma.new_daily([{"d": "2026-08-09", "backfill": True}], "x"), s1, at(10))
+        self.assertIn("pnj_ring_buy", d["days"][0])  # dòng backfill cũ được thêm cột null
 
 
 if __name__ == "__main__":

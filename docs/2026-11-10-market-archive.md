@@ -71,3 +71,10 @@ Raw: `https://raw.githubusercontent.com/trungtd47/tmb-data/main/public/data/mark
 ## Lesson
 
 Nguồn "đủ 1 request/ngày" cần kiểm độ phủ trước khi chọn: Simplize thiếu 31% ngày, nguồn cùng chuỗi với live (vang.today) đủ 100% và khỏi lệch nguồn khi nối backfill với dòng live.
+
+## Cập nhật schema v2 (2026-11-10, t_1d354c9c): giá vàng theo thương hiệu
+
+- `schema_version` 1 -> 2. Thêm cho 7 sản phẩm `btmh_sjc` (Bảo Tín Mạnh Hải - vàng miếng SJC), `btmh_kgb` (BTMH - nhẫn Kim Gia Bảo 24K), `doji_sjc`, `doji_ring` (nhẫn tròn 9999 Hưng Thịnh Vượng), `pnj_ring` (nhẫn trơn PNJ 999.9), `pq_sjc`, `pq_ring` (Phú Quý) các cột `{id}_buy`, `{id}_sell` (VND/lượng, hãng mua vào/bán ra) và `{id}_spread_pct` = (bán - mua) / bán x 100, cùng dạng `{open,high,low,close,avg,n}`. SJC miếng đã có `sjc_*` nên không lặp. Mọi dòng cũ được thêm cột = `null` (không có key thiếu).
+- Live: mỗi mẫu giờ lấy từ `brands[]` của `/api/gia-hom-nay` (sản phẩm thiếu/ẩn do nguồn lỗi -> null).
+- Backfill BTMH (`market_brand_backfill.py`, chạy 1 lần): `goldChartData` của baotinmanhhai.vn, 2026-08-09 -> 2026-11-09, **93/93 ngày cho cả `btmh_sjc` và `btmh_kgb`** (mua + bán + spread). So với `sjc_*` (vang.today) 87/93 ngày trùng tuyệt đối, 6 ngày lệch 0,3 - 2,0 triệu/lượng (chốt khác thời điểm trong ngày). DOJI/PNJ/Phú Quý: **chưa backfill (0 ngày)**, bắt đầu có từ 2026-11-10 khi cron lấy được `brands[]`.
+- Test: `python3 -m unittest tests/test_market_archive.py` 17/17.
