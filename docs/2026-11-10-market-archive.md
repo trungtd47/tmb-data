@@ -78,3 +78,9 @@ Nguồn "đủ 1 request/ngày" cần kiểm độ phủ trước khi chọn: Si
 - Live: mỗi mẫu giờ lấy từ `brands[]` của `/api/gia-hom-nay` (sản phẩm thiếu/ẩn do nguồn lỗi -> null).
 - Backfill BTMH (`market_brand_backfill.py`, chạy 1 lần): `goldChartData` của baotinmanhhai.vn, 2026-08-09 -> 2026-11-09, **93/93 ngày cho cả `btmh_sjc` và `btmh_kgb`** (mua + bán + spread). So với `sjc_*` (vang.today) 87/93 ngày trùng tuyệt đối, 6 ngày lệch 0,3 - 2,0 triệu/lượng (chốt khác thời điểm trong ngày). DOJI/PNJ/Phú Quý: **chưa backfill (0 ngày)**, bắt đầu có từ 2026-11-10 khi cron lấy được `brands[]`.
 - Test: `python3 -m unittest tests/test_market_archive.py` 17/17.
+
+## Cập nhật cách tính USDT (2026-11-10, t_1554c5d4): trung vị và thị trường chéo giá
+
+- **Từ commit này (site chính, 10/11/2026) giá USDT mỗi chiều là TRUNG VỊ của 5 quảng cáo đầu**, không còn trung bình. Lý do: một quảng cáo lệch (vd 25.900 giữa các giá 25.804-25.810) kéo trung bình lên. Các mẫu 30 phút và dòng ngày trước thời điểm này vẫn là trung bình, **không sửa lại**; chênh giữa hai cách thường chỉ vài chục đồng.
+- **Spread âm từ 10/11 trở đi (nếu có) là thị trường chéo thật**, khác với lỗi đảo chiều mua/bán trước 10/11 (xem `spread_unreliable`, sửa 6ebaf93b). Binance P2P đôi khi có giá người mua trả (tradeType=SELL) cao hơn giá người bán rao (tradeType=BUY) do hạn mức/điều kiện quảng cáo khác nhau; ví dụ 10:50 ngày 10/11: mua 25.780, bán lại 25.806 (trung vị).
+- `/api/p2p` từ nay trả `spread = max(0, buy - sell)` và thêm `crossed` (true khi bán lại > mua), nên mẫu mới do cron ghi sẽ có `spread` 0 thay vì số âm; `p2p-daily.json` đã lọc `spread > 0` khi lấy trung vị. Muốn đếm số lần chéo giá thì dùng `crossed` ở API live, không suy ra từ spread lịch sử.
